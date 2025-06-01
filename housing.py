@@ -22,3 +22,5 @@ housing.head()
 
 housing.glimpse()
 housing.describe()
+
+housing.group_by(pl.col("ocean_proximity")).len("n").sort("n", descending=True)
