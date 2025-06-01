@@ -1,0 +1,16 @@
+[project]
+name = "quick-py-ml"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.2.3",
+    "pathlib>=1.0.1",
+    "polars>=1.30.0",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.2.0",
+]
