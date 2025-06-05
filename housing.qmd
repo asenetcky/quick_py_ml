@@ -1,0 +1,212 @@
+---
+title: housing end to end
+---
+
+Just copying and pasting the notebook
+
+```{python}
+
+# Housing Example
+## imports
+import tarfile
+import urllib.request
+from pathlib import Path
+
+import polars as pl
+# import matplotlib as plt
+## Functions
+def load_housing_data():
+    tarball_path = Path("datasets/housing.tgz")
+    if not tarball_path.is_file():
+        Path("datasets").mkdir(parents=True, exist_ok=True)
+        url = "https://github.com/ageron/data/raw/main/housing.tgz"
+        urllib.request.urlretrieve(url, tarball_path)
+        with tarfile.open(tarball_path) as housing_tarball:
+            housing_tarball.extractall(path="datasets")
+    return pl.read_csv(Path("datasets/housing/housing.csv"))
+## Data
+housing = load_housing_data()
+
+housing.head()
+housing.glimpse()
+housing.describe()
+housing.group_by(pl.col("ocean_proximity")).len("n").sort("n", descending=True)
+housing.to_pandas().hist(bins=50, figsize=(12, 8))
+from sklearn.model_selection import train_test_split
+
+train_set, test_set = train_test_split(housing, test_size =0.2,   random_state=42)
+breaks=[1.5, 3.0, 4.5, 6]
+labels = ["1","2","3","4","5"]
+
+housing = (
+    housing.with_columns(
+        pl.col("median_income")
+        .cut(breaks=breaks, labels=labels)
+        .alias("income_cat")
+    )
+)
+
+housing.select(pl.col("income_cat")).group_by(pl.col("income_cat")).len().sort(pl.col("income_cat")).plot.bar(
+    x="income_cat", y = "len"
+)
+strat_train_set, strat_test_set = train_test_split(
+    housing, 
+    test_size=0.2, 
+    stratify=housing.select("income_cat"), 
+    random_state =42
+)
+length = len(strat_test_set)
+(
+    strat_test_set
+    .group_by("income_cat")
+    .len()
+    .with_columns(
+        pl.col("len").truediv(length).alias("prop")
+    )
+    .sort("income_cat")
+)
+
+
+for set_ in (strat_train_set, strat_test_set):
+    set_.drop_in_place("income_cat")
+## Exploring the Data
+housing = strat_train_set
+housing
+chart = (
+    housing
+    .sample(5000)
+    .plot
+    .point(
+        x="longitude",
+        y="latitude",
+    )
+)
+chart
+housing
+corr_matrix = housing.drop("ocean_proximity")
+corr_matrix = (
+    corr_matrix
+    .corr()
+    .with_columns(
+        index = pl.lit(pl.Series(corr_matrix.columns))
+    )
+    .unpivot(index = "index")
+    .filter(pl.col("index") != pl.col("variable"))
+)
+corr_matrix
+corr_matrix.filter(pl.col("index") == "median_house_value").sort("value", descending=True)
+housing=(
+    housing
+    .with_columns(
+        rooms_per_house= pl.col("total_rooms") / pl.col("households"),
+        bedrooms_ratio= pl.col("total_bedrooms") / pl.col("total_rooms"),
+        people_per_house= pl.col("population") / pl.col("households")
+    )
+)
+housing
+corr_matrix = housing.drop("ocean_proximity").drop_nulls()
+corr_matrix = (
+    corr_matrix
+    .corr()
+    .with_columns(
+        index = pl.lit(pl.Series(corr_matrix.columns))
+    )
+    .unpivot(index = "index")
+    .filter(pl.col("index") != pl.col("variable"))
+)
+corr_matrix
+corr_matrix.filter(pl.col("index") == "median_house_value").sort("value", descending=True)
+housing.describe()
+## Prep for ML
+housing = strat_train_set.drop("median_house_value")
+housing_labels = strat_train_set.select(pl.col("median_house_value"))
+from sklearn.impute import SimpleImputer
+
+imputer = SimpleImputer(strategy="median")
+import polars.selectors as cs
+
+housing_num = housing.select(cs.numeric())
+imputer.fit(housing_num)
+imputer.statistics_
+X = imputer.transform(housing_num)
+X
+housing_tr = pl.DataFrame(X)
+housing_tr.columns = housing_num.columns
+housing_tr
+housing_cat = housing.select("ocean_proximity")
+housing_cat
+from sklearn.preprocessing import OrdinalEncoder
+
+ordinal_encoder = OrdinalEncoder()
+housing_cat_encoded = ordinal_encoder.fit_transform(housing_cat)
+
+housing_cat_encoded
+ordinal_encoder.categories_
+from sklearn.preprocessing import MinMaxScaler
+
+min_max_scaler = MinMaxScaler(feature_range=(-1,1))
+housing_num_min_max_scaled = min_max_scaler.fit_transform(housing_num)
+housing_num_min_max_scaled
+from sklearn.preprocessing import StandardScaler
+
+std_scaler = StandardScaler()
+housing_num_std_scaled = std_scaler.fit_transform(housing_num)
+housing_num_std_scaled
+from sklearn.metrics.pairwise import rbf_kernel
+
+age_simil_35 = rbf_kernel(
+        housing.select("housing_median_age"),
+        [[35]],
+        gamma=0.1
+    )
+age_simil_35
+
+
+housing_labels
+from sklearn.linear_model import LinearRegression
+
+target_scaler = StandardScaler()
+scaled_labels = target_scaler.fit_transform(housing_labels)
+
+model = LinearRegression()
+model.fit(housing.select("median_income"), scaled_labels)
+
+# pretend
+some_new_data = housing.select("median_income").slice(0,5)
+
+scaled_predictions = model.predict(some_new_data)
+predictions = target_scaler.inverse_transform(scaled_predictions)
+
+print(some_new_data)
+print(scaled_predictions)
+print(predictions)
+from sklearn.compose import TransformedTargetRegressor
+
+model = TransformedTargetRegressor(
+    LinearRegression(),
+    transformer = StandardScaler()
+)
+
+model.fit(
+    housing.select("median_income"),
+    housing_labels
+)
+
+predictions = model.predict(some_new_data)
+
+print(predictions)
+
+import numpy as np
+from sklearn.preprocessing import FunctionTransformer
+
+log_transformer = FunctionTransformer(np.log, inverse_func=np.exp)
+log_pop = log_transformer.transform(housing.select("population"))
+log_pop
+rbf_transformer = FunctionTransformer(
+    rbf_kernel,
+    kw_args=dict(Y=[[35.]], gamma=0.1)
+)
+
+age_simil_35 = rbf_transformer.transform(housing.select("housing_median_age"))
+age_simil_35
+```
